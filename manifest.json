@@ -1,0 +1,10 @@
+{
+  "id": "onenote-like-navigator",
+  "name": "OneNote Like Navigator",
+  "version": "0.3.2",
+  "minAppVersion": "1.7.2",
+  "description": "Browse real folders as notebooks with compact navigation, optional folder trees, wrapped titles, and direct file management.",
+  "author": "KOFKINO",
+  "isDesktopOnly": false,
+  "authorUrl": "https://github.com/KOFKINO"
+}

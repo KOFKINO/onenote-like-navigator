@@ -1,0 +1,150 @@
+'use strict';
+const {Plugin, ItemView, Modal, FuzzySuggestModal, Menu, Notice, Setting, PluginSettingTab, TFolder, TFile, setIcon, addIcon} = require('obsidian');
+const C = (()=>{'use strict';
+const parent = p => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
+const within = (p, root) => !root || p === root || p.startsWith(root + '/');
+const remap = (p, old, next) => p === old ? next : p.startsWith(old + '/') ? next + p.slice(old.length) : p;
+function validName(name) {
+  if (!name || name !== name.trim() || /[\\/:*?"<>|\x00-\x1f]/.test(name) || /[. ]$/.test(name) || name === '.' || name === '..' || name.startsWith('.')) throw Error('名称不能为空，不能以点开头，也不能包含路径分隔符或特殊字符。');
+  if (/^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\.|$)/i.test(name)) throw Error('此名称是系统保留名称。');
+  return name;
+}
+function destination(file, folder) {
+  if (file.children && within(folder, file.path)) throw Error('不能把文件夹移到它自己或子文件夹里。');
+  return (folder ? folder + '/' : '') + file.name;
+}
+function ordered(items, order = []) {
+  const rank = new Map(order.map((p, i) => [p, i]));
+  return [...items].sort((a, b) => (rank.get(a.path) ?? Infinity) - (rank.get(b.path) ?? Infinity) || a.name.localeCompare(b.name, 'zh-Hans', {numeric: true}));
+}
+function migrate(data, old, next) {
+  const transform = p => remap(p, old, next);
+  data.book = transform(data.book || '');
+  const memories = {};
+  const mapMemory = v => ({...v, level: transform(v.level || ''), section: transform(v.section || ''), page: transform(v.page || ''), expanded: (v.expanded || []).map(transform), focusHistory: (v.focusHistory || []).map(mapMemory)});
+  for (const [k,v] of Object.entries(data.memories || {})) memories[transform(k)] = mapMemory(v);
+  data.memories = memories;
+  const orders = {};
+  for (const [k,v] of Object.entries(data.orders || {})) orders[transform(k)] = v.map(transform);
+  data.orders = orders;
+}
+return {parent, within, remap, validName, destination, ordered, migrate};
+
+})();
+const TYPE = 'onenote-like-navigator';
+const ICON = 'onl-square-notebook';
+const ICON_SVG = '<g fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="square" stroke-linejoin="miter"><rect x="14" y="14" width="72" height="72" rx="3"/><path d="M37 14v72M51 35h20M51 50h20M51 65h12"/></g>';
+const pathOf = f => f.path === '/' ? '' : f.path;
+const DEFAULTS = {book:'', memories:{}, orders:{}, showAttachments:false, openOnStart:true, openInNewTab:true, showFullTree:false, hiddenBooks:[]};
+function el(parent, tag, cls, text) { const e = parent.ownerDocument.createElement(tag); if(cls)e.className=cls; if(text!==undefined)e.textContent=text; parent.appendChild(e); return e; }
+function button(parent, icon, label, action, cls='') {
+  const b=el(parent,'button','onl-icon '+cls); b.type='button'; b.title=label; b.setAttribute('aria-label',label); setIcon(b,icon); b.onclick=action; return b;
+}
+class InputModal extends Modal {
+  constructor(app,title,value,action){super(app);this.heading=title;this.value=value;this.action=action;}
+  onOpen(){this.titleEl.setText(this.heading); const input=el(this.contentEl,'input','onl-input');input.value=this.value;input.setAttribute('aria-label',this.heading);const error=el(this.contentEl,'p','onl-error');const row=el(this.contentEl,'div','onl-modal-actions');let busy=false;const submit=async()=>{if(busy)return;busy=true;try{await this.action(input.value);this.close();}catch(e){error.textContent=e.message;}finally{busy=false;}}; const cancel=el(row,'button','', '取消');cancel.onclick=()=>this.close();const ok=el(row,'button','mod-cta','确定');ok.onclick=submit;input.onkeydown=e=>{if(e.key==='Enter')void submit();};setTimeout(()=>{input.focus();input.select();},30);}
+}
+class Picker extends FuzzySuggestModal {
+  constructor(app,title,items,label,action){super(app);this.items=items;this.label=label;this.action=action;this.setPlaceholder(title);}
+  getItems(){return this.items;}getItemText(x){return this.label(x);}onChooseItem(x){this.action(x);}
+}
+class DeleteModal extends Modal {
+  constructor(app,file,action){super(app);this.file=file;this.action=action;}
+  onOpen(){this.titleEl.setText('移入回收站？');el(this.contentEl,'p','',this.file.path);el(this.contentEl,'p','',this.file instanceof TFolder?'此文件夹及里面的全部内容会被移入笔记库的 .trash 回收站。':'此文件会移入笔记库的 .trash 回收站。');const row=el(this.contentEl,'div','onl-modal-actions');const cancel=el(row,'button','','取消');cancel.onclick=()=>this.close();const ok=el(row,'button','mod-warning','移入回收站');ok.onclick=async()=>{ok.disabled=true;try{await this.action();this.close();}catch(e){new Notice(e.message);ok.disabled=false;}};cancel.focus();}
+}
+class Navigator extends ItemView {
+  constructor(leaf,plugin){super(leaf);this.plugin=plugin;this.query='';this.scrolls={};}
+  getViewType(){return TYPE;}getDisplayText(){return '笔记本导航';}getIcon(){return ICON;}
+  async onOpen(){this.contentEl.classList.add('onl-host');this.render();}
+  async onClose(){this.capture();await this.plugin.persist();}
+  capture(){const m=this.renderedMemory;if(!m)return;for(const k of ['sections','pages']){const node=this.contentEl.querySelector('.onl-'+k+' .onl-list');if(node)m[k+'Scroll']=node.scrollTop;}}
+  navigate(action){this.capture();this.query='';action();this.plugin.sanitize();void this.plugin.persist();this.render();}
+  render(){
+    const p=this.plugin;p.sanitize();const d=p.data,m=p.memory(),root=this.contentEl;this.renderedMemory=m;const oldFocus=root.ownerDocument.activeElement?.dataset?.path;
+    root.replaceChildren(); const shell=el(root,'div','onl-shell');
+    const head=el(shell,'header','onl-header'); const book=el(head,'button','onl-book');setIcon(el(book,'span','onl-book-icon'),ICON);el(book,'span','onl-book-name',d.book.split('/').pop()||'未分类 · 根目录');setIcon(el(book,'span','onl-book-chevron'),'chevrons-up-down');book.title='切换笔记本';book.onclick=()=>p.pickBook();
+    button(head,'plus','新建笔记本',()=>p.create('',true));button(head,'more-horizontal','笔记本菜单',e=>this.bookMenu(e));
+    const trail=el(shell,'div','onl-trail');const up=button(trail,'arrow-left','返回上一级',()=>this.navigate(()=>{const target=C.parent(m.section);if(m.section===m.level&&m.level!==d.book){p.exitFocus();return;}if(m.section===d.book){d.book='';const next=p.memory();next.level='';next.section='';}else p.selectFolder(target);}));up.disabled=!m.section;
+    if(m.section){up.title='选择上一级；拖放到这里可移到当前所选文件夹的上一级';this.dropFolder(up,p.folder(C.parent(m.section)));}
+    const location=el(trail,'button','onl-location',m.section===d.book?'笔记本首页':m.section.split('/').pop());location.title='当前选中：'+(m.section||'根目录')+'；点击跳转上级';location.onclick=()=>this.ancestors();button(trail,'locate-fixed','定位当前笔记',()=>p.reveal());
+    if(m.level!==d.book){const focusBar=el(shell,'div','onl-focus-bar');el(focusBar,'span','','聚焦：'+m.level.split('/').pop());button(focusBar,'minimize-2','退出聚焦',()=>p.exitFocus());}
+    const search=el(shell,'input','onl-search');search.placeholder='筛选当前目录与页面…';search.setAttribute('aria-label','筛选当前目录与页面');search.value=this.query;search.oninput=()=>{this.query=search.value;this.renderLists();};
+    const hint=el(shell,'div','onl-drag-hint','拖到条目边缘排序 · 拖到文件夹中央移入 · 拖到 ← 移出');hint.setAttribute('role','status');
+    const panes=el(shell,'div','onl-panes');this.sectionPane=el(panes,'section','onl-pane onl-sections');this.pagePane=el(panes,'section','onl-pane onl-pages');this.renderLists();
+    if(oldFocus){const b=[...root.querySelectorAll('[data-path]')].find(x=>x.dataset.path===oldFocus);b?.focus({preventScroll:true});}
+  }
+  renderLists(){
+    const p=this.plugin,m=p.memory(),level=p.folder(p.data.showFullTree?m.level:m.section),section=p.folder(m.section);if(!this.sectionPane)return;
+    for(const pane of [this.sectionPane,this.pagePane])pane.replaceChildren();
+    const sh=el(this.sectionPane,'div','onl-pane-head');el(sh,'span','','目录');button(sh,'folder-plus','新建分区',()=>p.create(m.section,true));
+    const sl=el(this.sectionPane,'div','onl-list');sl.setAttribute('aria-label','分区列表');
+    const home=el(sl,'button','onl-row onl-home'+(m.section===pathOf(level)?' is-active':''));home.dataset.path=pathOf(level);home.setAttribute('aria-pressed',String(m.section===pathOf(level)));setIcon(el(home,'span','onl-row-icon'),'files');el(home,'span','onl-label','本层页面');home.title='显示 '+(pathOf(level)||'根目录')+' 的直属文档';home.onclick=()=>this.navigate(()=>p.selectFolder(pathOf(level)));this.dropFolder(home,level);
+    const tree=el(sl,'div','onl-tree');tree.setAttribute('role','tree');tree.setAttribute('aria-label','文件夹目录');
+    const query=this.query.toLocaleLowerCase(),matches=new Map();
+    const match=f=>{if(!query)return true;if(!p.data.showFullTree)return f.name.toLocaleLowerCase().includes(query);if(matches.has(f.path))return matches.get(f.path);const ok=f.name.toLocaleLowerCase().includes(query)||f.children.some(x=>x instanceof TFolder&&match(x));matches.set(f.path,ok);return ok;};
+    const draw=(folder,depth,container)=>{for(const f of p.sorted(folder).filter(x=>x instanceof TFolder&&match(x))){const group=el(container,'div','onl-tree-node');const hasChildren=f.children.some(x=>x instanceof TFolder&&!x.name.startsWith('.'));const expanded=p.data.showFullTree&&hasChildren&&(!!query||m.expanded.includes(f.path));this.sectionRow(group,f,depth,expanded,hasChildren);if(expanded){const children=el(group,'div','onl-tree-group');children.setAttribute('role','group');draw(f,depth+1,children);}}};draw(level,0,tree);
+    if(!tree.children.length)el(sl,'p','onl-empty',query?'没有匹配的分区':'暂无子分区，可直接在右侧写笔记。');
+    const ph=el(this.pagePane,'div','onl-pane-head');el(ph,'span','onl-page-title',m.section===m.level?'本层页面':section.name);button(ph,'file-plus','新建笔记',()=>p.create(m.section,false));button(ph,'more-horizontal','页面列表选项',e=>{const menu=new Menu();menu.addItem(i=>i.setTitle(p.data.showAttachments?'隐藏附件':'显示附件').onClick(()=>{p.data.showAttachments=!p.data.showAttachments;void p.persist();this.render();}));menu.addItem(i=>i.setTitle('恢复名称排序').onClick(()=>{delete p.data.orders[m.section];void p.persist();this.render();}));menu.showAtMouseEvent(e);});
+    const pl=el(this.pagePane,'div','onl-list');pl.setAttribute('aria-label','页面列表');
+    const files=p.sorted(section).filter(x=>x instanceof TFile && (p.data.showAttachments||x.extension==='md') && x.name.toLocaleLowerCase().includes(this.query.toLocaleLowerCase()));
+    for(const f of files){const b=el(pl,'button','onl-row onl-page'+(m.page===f.path?' is-active':''));b.dataset.path=f.path;b.setAttribute('aria-current',m.page===f.path?'page':'false');setIcon(el(b,'span','onl-row-icon'),f.extension==='md'?'file-text':'paperclip');el(b,'span','onl-label',f.extension==='md'?f.basename:f.name);b.onclick=()=>void p.open(f);b.oncontextmenu=e=>{e.preventDefault();p.menu(f,e);};b.onkeydown=e=>{if(e.altKey&&(e.key==='ArrowUp'||e.key==='ArrowDown')){e.preventDefault();p.reorder(f,e.key==='ArrowUp'?-1:1);}else if(e.key==='F2'){e.preventDefault();p.rename(f);}else if(e.key==='Delete'){e.preventDefault();p.remove(f);}};this.draggable(b,f,false);}
+    if(!files.length)el(pl,'p','onl-empty',this.query?'没有匹配的笔记':'这里还没有笔记。点击上方 ＋ 新建。');
+    this.dropFolder(sl,level);this.dropFolder(pl,section);for(const [key,list] of [['sections',sl],['pages',pl]]){list.scrollTop=m[key+'Scroll']||0;list.onscroll=()=>{m[key+'Scroll']=list.scrollTop;};this.keyboardList(list);}
+  }
+  keyboardList(list){list.addEventListener('keydown',e=>{if(e.altKey||e.ctrlKey||!['ArrowDown','ArrowUp','Home','End'].includes(e.key))return;const buttons=[...list.querySelectorAll('button[data-path]')];const i=buttons.indexOf(list.ownerDocument.activeElement);if(i<0)return;e.preventDefault();const next=e.key==='Home'?0:e.key==='End'?buttons.length-1:Math.max(0,Math.min(buttons.length-1,i+(e.key==='ArrowDown'?1:-1)));buttons[next]?.focus();});}
+  sectionRow(list,f,depth,expanded,hasChildren){const p=this.plugin,m=p.memory();const row=el(list,'div','onl-section-row'+(m.section===f.path?' is-active':''));row.style.setProperty('--onl-indent',Math.min(depth,4)*8+'px');row.setAttribute('role','treeitem');row.setAttribute('aria-level',String(depth+1));row.setAttribute('aria-selected',String(m.section===f.path));if(hasChildren)row.setAttribute('aria-expanded',String(expanded));
+    const toggle=p.data.showFullTree?button(row,expanded?'chevron-down':'chevron-right',(expanded?'折叠 ':'展开 ')+f.name,()=>this.navigate(()=>{m.expanded=expanded?m.expanded.filter(x=>x!==f.path):[...m.expanded,f.path];}),'onl-toggle'):null;if(toggle&&!hasChildren){toggle.disabled=true;toggle.classList.add('is-empty');}
+    const b=el(row,'button','onl-row');b.dataset.path=f.path;setIcon(el(b,'span','onl-row-icon'),'folder');el(b,'span','onl-label',f.name);b.title=f.path+(depth>4?'（第 '+(depth+1)+' 层，可右键聚焦）':'');b.onclick=()=>this.enter(f);b.oncontextmenu=e=>{e.preventDefault();p.menu(f,e);};b.onkeydown=e=>{if(e.key==='ArrowRight'){e.preventDefault();this.enter(f);}else if(e.key==='ArrowLeft'){e.preventDefault();if(expanded&&toggle)toggle.click();else this.navigate(()=>p.selectFolder(pathOf(f.parent)));}else if(e.key==='F2'){e.preventDefault();p.rename(f);}else if(e.altKey&&['ArrowUp','ArrowDown'].includes(e.key)){e.preventDefault();p.reorder(f,e.key==='ArrowUp'?-1:1);}else if(e.key==='Delete'){e.preventDefault();p.remove(f);}};
+    if(depth>4)el(b,'span','onl-depth',String(depth+1));this.draggable(b,f,true);
+  }
+  enter(f){this.navigate(()=>this.plugin.selectFolder(pathOf(f)));}
+  dragSource(e){return this.plugin.app.vault.getAbstractFileByPath(e.dataTransfer.getData('application/x-onl-path')||this.plugin.dragPath||'');}
+  clearDrag(){for(const node of this.contentEl.querySelectorAll('.onl-drop,.onl-drop-before,.onl-drop-after'))node.classList.remove('onl-drop','onl-drop-before','onl-drop-after');this.contentEl.querySelector('.onl-shell')?.classList.remove('is-dragging');this.plugin.dragPath=null;}
+  draggable(b,f,isFolder){
+    b.draggable=true;b.ondragstart=e=>{this.plugin.dragPath=f.path;e.dataTransfer.setData('application/x-onl-path',f.path);e.dataTransfer.effectAllowed='move';this.contentEl.querySelector('.onl-shell')?.classList.add('is-dragging');};b.ondragend=()=>this.clearDrag();
+    const intent=e=>{const src=this.dragSource(e);if(!src||src===f)return null;const same=src.parent===f.parent&&(src instanceof TFolder)===(f instanceof TFolder);const rect=b.getBoundingClientRect();const position=(e.clientY-rect.top)/rect.height;if(same&&(!isFolder||position<.25||position>.75))return position<.5?'before':'after';return isFolder?'inside':null;};
+    b.ondragover=e=>{if(!e.dataTransfer.types.includes('application/x-onl-path'))return;e.preventDefault();e.stopPropagation();b.classList.remove('onl-drop','onl-drop-before','onl-drop-after');const mode=intent(e);if(mode)b.classList.add(mode==='inside'?'onl-drop':'onl-drop-'+mode);e.dataTransfer.dropEffect=mode?'move':'none';};
+    b.ondragleave=()=>b.classList.remove('onl-drop','onl-drop-before','onl-drop-after');
+    b.ondrop=e=>{if(!e.dataTransfer.types.includes('application/x-onl-path'))return;e.preventDefault();e.stopPropagation();const src=this.dragSource(e),mode=intent(e);this.clearDrag();if(!src||!mode)return;if(mode==='inside')void this.plugin.run(()=>this.plugin.move(src,f));else this.plugin.placeRelative(src,f,mode==='after');};
+  }
+  dropFolder(node,f){node.ondragover=e=>{if(e.dataTransfer.types.includes('application/x-onl-path')){e.preventDefault();e.stopPropagation();node.classList.add('onl-drop');e.dataTransfer.dropEffect='move';}};node.ondragleave=()=>node.classList.remove('onl-drop');node.ondrop=e=>{if(!e.dataTransfer.types.includes('application/x-onl-path'))return;e.preventDefault();e.stopPropagation();const src=this.dragSource(e);this.clearDrag();if(src)void this.plugin.run(()=>this.plugin.move(src,f));};}
+  ancestors(){const p=this.plugin,paths=[];let path=p.memory().section;while(C.within(path,p.memory().level)){paths.push(path);if(path===p.memory().level)break;path=C.parent(path);}new Picker(this.app,'跳转到上级目录',paths,x=>x||'笔记本首页',x=>this.navigate(()=>p.selectFolder(x))).open();}
+  bookMenu(e){const p=this.plugin,menu=new Menu();if(p.data.book){const f=p.folder(p.data.book);menu.addItem(i=>i.setTitle('重命名当前笔记本').onClick(()=>p.rename(f)));menu.addItem(i=>i.setTitle('移动当前笔记本').onClick(()=>p.pickMove(f)));menu.addItem(i=>i.setTitle('隐藏当前笔记本入口').onClick(()=>{p.data.hiddenBooks.push(p.data.book);p.data.book='';p.sanitize();void p.persist();p.refresh();}));menu.addSeparator();menu.addItem(i=>i.setTitle('删除当前笔记本…').onClick(()=>p.remove(f)));}menu.addItem(i=>i.setTitle('显示所有笔记本入口').onClick(()=>{p.data.hiddenBooks=[];void p.persist();p.refresh();}));menu.showAtMouseEvent(e);}
+}
+class Options extends PluginSettingTab {
+  constructor(app,p){super(app,p);this.p=p;}
+  display(){this.containerEl.empty();new Setting(this.containerEl).setName('显示完整目录树').setDesc('默认关闭：左栏只显示当前文件夹的下一级子目录，不嵌套、无三角角标。开启后使用可展开的多层目录树。').addToggle(t=>t.setValue(this.p.data.showFullTree).onChange(async v=>{for(const l of this.p.app.workspace.getLeavesOfType(TYPE))l.view.capture();this.p.data.showFullTree=v;const m=this.p.memory();this.p.selectFolder(m.section);m.sectionsScroll=0;await this.p.persist();this.p.refresh(false);}));new Setting(this.containerEl).setName('在新标签页打开并置于前台').setDesc('默认开启：点击文档时新建标签页，并立即切换到它。关闭后复用当前文档标签页。').addToggle(t=>t.setValue(this.p.data.openInNewTab).onChange(async v=>{this.p.data.openInNewTab=v;await this.p.persist();}));new Setting(this.containerEl).setName('启动时打开笔记本导航').addToggle(t=>t.setValue(this.p.data.openOnStart).onChange(async v=>{this.p.data.openOnStart=v;await this.p.persist();}));new Setting(this.containerEl).setName('显示附件').setDesc('关闭时页面列表只显示 Markdown 笔记。').addToggle(t=>t.setValue(this.p.data.showAttachments).onChange(async v=>{this.p.data.showAttachments=v;await this.p.persist();this.p.refresh();}));new Setting(this.containerEl).setName('恢复隐藏的笔记本入口').addButton(b=>b.setButtonText('显示全部').onClick(async()=>{this.p.data.hiddenBooks=[];await this.p.persist();this.p.refresh();}));}
+}
+module.exports=class OneNoteLike extends Plugin {
+  async onload(){addIcon(ICON,ICON_SVG);const saved=await this.loadData();this.data={...DEFAULTS,...saved};if(!saved)this.data.book=this.books()[0]?.path||'';this.data.memories||={};this.data.orders||={};if(this.data.navigationVersion!==3){for(const [book,m] of Object.entries(this.data.memories)){m.level=book;m.section??=book;m.expanded=[];m.focusHistory=[];let path=m.section;while(path&&path!==book&&C.within(path,book)){m.expanded.push(path);path=C.parent(path);}}this.data.navigationVersion=3;}this.saveChain=Promise.resolve();this.registerView(TYPE,leaf=>new Navigator(leaf,this));this.addRibbonIcon(ICON,'笔记本导航',()=>void this.activate());this.addSettingTab(new Options(this.app,this));this.addCommand({id:'open',name:'打开笔记本导航',callback:()=>void this.activate()});this.addCommand({id:'switch-notebook',name:'切换笔记本',callback:()=>this.pickBook()});this.addCommand({id:'reveal',name:'定位当前笔记',callback:()=>this.reveal()});this.addCommand({id:'new-page',name:'在当前分区新建笔记',callback:()=>{this.sanitize();this.create(this.memory().section,false);}});
+    for(const event of ['create','delete'])this.registerEvent(this.app.vault.on(event,()=>this.changed()));
+    this.registerEvent(this.app.vault.on('rename',(file,old)=>{C.migrate(this.data,old,file.path);this.data.hiddenBooks=this.data.hiddenBooks.map(x=>C.remap(x,old,file.path));if(this.data.book.includes('/')){const moved=this.memory();this.data.book=this.data.book.split('/')[0];this.data.memories[this.data.book]=moved;}this.changed();}));
+    this.registerEvent(this.app.workspace.on('file-open',f=>{if(f&&C.within(f.path,this.data.book)){this.memory().page=f.path;this.refresh();}}));
+    this.app.workspace.onLayoutReady(()=>{this.sanitize();if(this.data.openOnStart)void this.activate();});
+  }
+  onunload(){clearTimeout(this.timer);}
+  persist(){const snapshot=JSON.parse(JSON.stringify(this.data));this.saveChain=this.saveChain.catch(()=>{}).then(()=>this.saveData(snapshot));return this.saveChain;}
+  folder(path){const f=this.app.vault.getAbstractFileByPath(path);return f instanceof TFolder?f:this.app.vault.getRoot();}
+  books(){return this.app.vault.getRoot().children.filter(x=>x instanceof TFolder&&!x.name.startsWith('.')&&!this.data.hiddenBooks.includes(x.path)).sort((a,b)=>a.name.localeCompare(b.name,'zh-Hans',{numeric:true}));}
+  memory(){return this.data.memories[this.data.book]??=( {level:this.data.book,section:this.data.book,page:'',expanded:[],focusHistory:[]} );}
+  sanitize(){if(this.data.book&&!this.books().some(x=>x.path===this.data.book))this.data.book=this.books()[0]?.path||'';const m=this.memory();for(const key of ['level','section']){if(!C.within(m[key]||'',this.data.book))m[key]=this.data.book;while(m[key]&&!(this.app.vault.getAbstractFileByPath(m[key]) instanceof TFolder))m[key]=C.parent(m[key]);if(!C.within(m[key],this.data.book))m[key]=this.data.book;}if(!C.within(m.section,m.level))m.section=m.level;m.expanded=(m.expanded||[]).filter(x=>this.app.vault.getAbstractFileByPath(x) instanceof TFolder);m.focusHistory||=[];}
+  selectFolder(path){const m=this.memory();m.section=path;m.pagesScroll=0;let current=path;while(C.within(current,m.level)&&current!==m.level){if(!m.expanded.includes(current))m.expanded.push(current);current=C.parent(current);}}
+  focusFolder(file){for(const l of this.app.workspace.getLeavesOfType(TYPE))l.view.capture();const m=this.memory();if(m.level===file.path){this.selectFolder(file.path);this.refresh();return;}m.focusHistory.push({level:m.level,section:m.section,page:m.page,expanded:[...m.expanded],sectionsScroll:m.sectionsScroll||0,pagesScroll:m.pagesScroll||0});m.level=file.path;m.section=file.path;m.sectionsScroll=0;m.pagesScroll=0;this.sanitize();void this.persist();this.refresh(false);}
+  exitFocus(){const m=this.memory(),history=m.focusHistory||[],previous=history.pop();if(previous)Object.assign(m,previous,{focusHistory:history});else{m.level=this.data.book;m.section=this.data.book;m.focusHistory=[];}this.sanitize();void this.persist();this.refresh(false);}
+  sorted(folder){return C.ordered(folder.children.filter(x=>!x.name.startsWith('.')),this.data.orders[pathOf(folder)]);}
+  changed(){clearTimeout(this.timer);this.timer=setTimeout(()=>{this.sanitize();this.refresh();void this.persist();},100);}
+  refresh(capture=true){for(const l of this.app.workspace.getLeavesOfType(TYPE)){if(capture)l.view.capture();l.view.render();}}
+  async activate(){let leaf=this.app.workspace.getLeavesOfType(TYPE)[0];if(!leaf){leaf=this.app.workspace.getLeftLeaf(false);if(!leaf)return;await leaf.setViewState({type:TYPE,active:true});}await this.app.workspace.revealLeaf(leaf);return leaf;}
+  pickBook(){const roots=[...this.books(),this.app.vault.getRoot()];new Picker(this.app,'搜索或切换笔记本',roots,x=>pathOf(x)?x.name:'未分类 · 根目录',x=>{for(const l of this.app.workspace.getLeavesOfType(TYPE))l.view.capture();this.data.book=pathOf(x);this.sanitize();void this.persist();this.refresh();void this.activate();}).open();}
+  async open(file,newTab=this.data.openInNewTab){await this.run(async()=>{const m=this.memory();m.page=file.path;const leaf=this.app.workspace.getLeaf(newTab?'tab':false);await leaf.openFile(file,{active:true});await this.app.workspace.revealLeaf(leaf);await this.persist();this.refresh(false);});}
+  reveal(){const f=this.app.workspace.getActiveFile();if(!f){new Notice('请先打开一篇笔记');return;}this.data.book=f.path.includes('/')?f.path.split('/')[0]:'';const m=this.memory();if(!C.within(pathOf(f.parent),m.level)){m.level=this.data.book;m.focusHistory=[];}this.sanitize();this.selectFolder(pathOf(f.parent));m.page=f.path;void this.persist();this.refresh();void this.activate();}
+  async run(action){try{await action();}catch(e){new Notice(e.message||String(e));}}
+  create(path,folder){new InputModal(this.app,folder?(path?'新建分区':'新建笔记本'):'新建笔记','',async value=>{const name=C.validName(value);const target=(path?path+'/':'')+name+(!folder&&!name.toLowerCase().endsWith('.md')?'.md':'');if(this.app.vault.getAbstractFileByPath(target))throw Error('同名文件或文件夹已经存在。');const f=folder?await this.app.vault.createFolder(target):await this.app.vault.create(target,'');if(folder&&!path){this.data.book=f.path;this.sanitize();}if(!folder)await this.open(f);this.changed();}).open();}
+  rename(file){new InputModal(this.app,'重命名',file.name,async value=>{const name=C.validName(value);const path=(pathOf(file.parent)?pathOf(file.parent)+'/':'')+name;if(path===file.path)return;if(this.app.vault.getAbstractFileByPath(path))throw Error('同名文件或文件夹已经存在。');await this.app.fileManager.renameFile(file,path);}).open();}
+  pickMove(file){const folders=this.app.vault.getAllLoadedFiles().filter(x=>x instanceof TFolder&&!(file instanceof TFolder&&C.within(x.path,file.path)));new Picker(this.app,'选择目标文件夹（可搜索完整路径）',folders,x=>x.path||'笔记库根目录',x=>void this.run(()=>this.move(file,x))).open();}
+  async move(file,folder){const path=C.destination(file,pathOf(folder));if(path===file.path)return;if(this.app.vault.getAbstractFileByPath(path))throw Error('目标目录已有同名项目，没有覆盖。');await this.app.fileManager.renameFile(file,path);}
+  remove(file){new DeleteModal(this.app,file,async()=>{await this.app.vault.trash(file,false);this.changed();}).open();}
+  reorder(file,delta){const siblings=this.sorted(file.parent).filter(x=>(x instanceof TFolder)===(file instanceof TFolder));const i=siblings.indexOf(file),j=i+delta;if(i<0||j<0||j>=siblings.length)return;this.placeRelative(file,siblings[j],delta>0);}
+  placeRelative(src,target,after=false){if(src===target||!src.parent||src.parent!==target.parent||(src instanceof TFolder)!==(target instanceof TFolder))return;const items=this.sorted(src.parent).filter(x=>x!==src);const i=items.indexOf(target);if(i<0)return;items.splice(i+(after?1:0),0,src);this.data.orders[pathOf(src.parent)]=items.map(x=>x.path);void this.persist();this.refresh();}
+  menu(file,event){const menu=new Menu();if(file instanceof TFolder){menu.addItem(i=>i.setTitle('聚焦此文件夹').setIcon('focus').onClick(()=>this.focusFolder(file)));menu.addItem(i=>i.setTitle('新建笔记').onClick(()=>this.create(file.path,false)));menu.addItem(i=>i.setTitle('新建子分区').onClick(()=>this.create(file.path,true)));}else menu.addItem(i=>i.setTitle('在新标签页打开').onClick(()=>void this.open(file,true)));menu.addItem(i=>i.setTitle('重命名').setIcon('pencil').onClick(()=>this.rename(file)));menu.addItem(i=>i.setTitle('移动到…').setIcon('folder-input').onClick(()=>this.pickMove(file)));menu.addItem(i=>i.setTitle('上移').onClick(()=>this.reorder(file,-1)));menu.addItem(i=>i.setTitle('下移').onClick(()=>this.reorder(file,1)));menu.addSeparator();menu.addItem(i=>i.setTitle('移入回收站…').setIcon('trash-2').onClick(()=>this.remove(file)));menu.showAtMouseEvent(event);}
+};

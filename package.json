@@ -1,0 +1,14 @@
+{
+  "name": "onenote-like-navigator",
+  "version": "0.3.2",
+  "private": true,
+  "description": "Compact notebook navigation for Obsidian.",
+  "license": "MIT",
+  "scripts": {
+    "build": "node scripts/build.cjs",
+    "test": "node --test tests/*.test.cjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
