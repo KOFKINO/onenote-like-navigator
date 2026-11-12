@@ -1,3 +1,4 @@
+# obsidian plugin ob目录优化插件
 # OneNote Like Navigator
 
 **Browse Obsidian as notebooks, folders, and pages—without an ever-wider folder tree.**
@@ -80,7 +81,7 @@ npm test
 Source is in `src/`; the build generates root `main.js`. Tests use an in-memory Obsidian adapter and do not access a real vault. CI verifies the tests and checks that committed release code matches the build.
 
 ## 中文说明
-
+**参考onenote格式实现obsidian目录展示优化**
 **把真实目录变成笔记本导航，目录再深也不增加横向列数。**
 
 一级文件夹自动成为笔记本。点击顶部名称切换笔记本；点击文件夹，左栏显示下一级子目录，右栏显示直属文档。默认不嵌套、无三角角标；可开启「显示完整目录树」。长名称自动换行。「本层页面」仅是直属文档列表入口，不额外创建笔记。
