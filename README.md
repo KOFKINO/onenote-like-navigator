@@ -1,13 +1,25 @@
-# obsidian plugin ob目录优化插件
 # OneNote Like Navigator
 
-**Browse Obsidian as notebooks, folders, and pages—without an ever-wider folder tree.**
+**An Obsidian plugin that brings OneNote-style notebook navigation to your existing folders and notes.**
 
-[中文说明](#中文说明) · [MIT license](LICENSE)
+**这是一个 Obsidian 目录导航插件：以 OneNote 风格切换笔记本，聚焦当前目录，同时直接管理真实文件。**
+
+[中文说明](#中文说明) · [Installation](#installation) · [Download](https://github.com/KOFKINO/onenote-like-navigator/releases/latest) · [Report an issue](https://github.com/KOFKINO/onenote-like-navigator/issues) · [MIT license](LICENSE)
 
 Top-level folders automatically become notebooks. Pick a notebook, click a folder, and see its direct subfolders on the left and its notes on the right. Long names wrap; deeper folders do not add columns.
 
 This independent community project is not affiliated with Microsoft or Obsidian. It does not import or convert OneNote files.
+
+## Why use it?
+
+Large folder trees can crowd the sidebar and make long names hard to read. This plugin lets you focus on one notebook and one folder level at a time, while keeping your existing vault structure.
+
+| In your vault | In the navigator |
+| --- | --- |
+| Top-level folder | A notebook in the notebook switcher |
+| Current folder's subfolders | The left pane, one level at a time by default |
+| Current folder's direct notes | The right pane, selected automatically on entry |
+| A renamed, moved, or newly created folder | Updated navigation without a separate configuration |
 
 ## Features
 
@@ -29,7 +41,7 @@ This independent community project is not affiliated with Microsoft or Obsidian.
 
 Requires **Obsidian 1.7.2+**. The community directory listing is not yet available.
 
-Download `main.js`, `manifest.json`, and `styles.css` from this repository's GitHub release. Place them directly inside `<vault>/.obsidian/plugins/onenote-like-navigator/`. Reload Obsidian and enable **OneNote Like Navigator** in **Settings → Community plugins**.
+Download `main.js`, `manifest.json`, and `styles.css` from the [latest release](https://github.com/KOFKINO/onenote-like-navigator/releases/latest). Place them directly inside `<vault>/.obsidian/plugins/onenote-like-navigator/`. Reload Obsidian and enable **OneNote Like Navigator** in **Settings → Community plugins**.
 
 No build step, account, or subscription is needed to use release files.
 
@@ -81,8 +93,9 @@ npm test
 Source is in `src/`; the build generates root `main.js`. Tests use an in-memory Obsidian adapter and do not access a real vault. CI verifies the tests and checks that committed release code matches the build.
 
 ## 中文说明
-**参考onenote格式实现obsidian目录展示优化**
-**把真实目录变成笔记本导航，目录再深也不增加横向列数。**
+**适用于目录层级多、希望像 OneNote 一样按笔记本浏览的 Obsidian 用户。**
+
+它提供独立的侧栏导航视图，直接使用笔记库中的文件夹和文件，不需要逐个配置入口。默认只展示当前层级，减少目录拥挤；需要全局浏览时，可以开启完整目录树。
 
 一级文件夹自动成为笔记本。点击顶部名称切换笔记本；点击文件夹，左栏显示下一级子目录，右栏显示直属文档。默认不嵌套、无三角角标；可开启「显示完整目录树」。长名称自动换行。「本层页面」仅是直属文档列表入口，不额外创建笔记。
 
