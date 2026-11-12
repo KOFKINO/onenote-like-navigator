@@ -1,0 +1,28 @@
+name: Release
+on:
+  push:
+    branches: [main]
+    paths: [manifest.json, '.github/workflows/release.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm run build && npm test
+      - run: git diff --exit-code -- main.js
+      - name: Publish version and installation files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(node -p "require('./manifest.json').version")
+          if gh release view "$VERSION" >/dev/null 2>&1; then
+            echo "Release already exists; leaving it unchanged."
+            exit 0
+          fi
+          gh release create "$VERSION" main.js manifest.json styles.css --target "$GITHUB_SHA" --title "$VERSION" --notes "OneNote-inspired navigation using real folders. Compact single-level navigation by default, optional full tree, drag sorting and moves, and configurable foreground tabs. Chinese interface; mobile touch testing pending. MIT license. See README for installation."
