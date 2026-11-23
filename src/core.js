@@ -1,4 +1,18 @@
 'use strict';
+// Built-in formats documented at https://help.obsidian.md/Files+and+folders/Accepted+file+formats
+const supportedExtensions = new Set(['md','base','canvas','avif','bmp','gif','jpeg','jpg','png','svg','webp','flac','m4a','mp3','ogg','wav','webm','3gp','mkv','mov','mp4','ogv','pdf']);
+const isSupportedFile = extension => supportedExtensions.has(extension.toLowerCase());
+function fileIcon(extension) {
+  const ext = extension.toLowerCase();
+  if (ext === 'md') return 'file-text';
+  if (ext === 'canvas') return 'layout-dashboard';
+  if (ext === 'base') return 'table';
+  if (ext === 'pdf') return 'file-text';
+  if (['avif','bmp','gif','jpeg','jpg','png','svg','webp'].includes(ext)) return 'image';
+  if (['mkv','mov','mp4','ogv','webm'].includes(ext)) return 'video';
+  if (['flac','m4a','mp3','ogg','wav','3gp'].includes(ext)) return 'music';
+  return 'paperclip';
+}
 const parent = p => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
 const within = (p, root) => !root || p === root || p.startsWith(root + '/');
 const remap = (p, old, next) => p === old ? next : p.startsWith(old + '/') ? next + p.slice(old.length) : p;
@@ -26,4 +40,4 @@ function migrate(data, old, next) {
   for (const [k,v] of Object.entries(data.orders || {})) orders[transform(k)] = v.map(transform);
   data.orders = orders;
 }
-module.exports = {parent, within, remap, validName, destination, ordered, migrate};
+module.exports = {parent, within, remap, validName, destination, ordered, migrate, isSupportedFile, fileIcon};

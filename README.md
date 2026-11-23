@@ -65,7 +65,7 @@ Command palette entries use the prefix **OneNote Like Navigator:**. No global ho
 | 显示完整目录树 (Show full folder tree) | Off | Show only direct child folders; enable for a nested tree. |
 | 在新标签页打开并置于前台 (Open in a new foreground tab) | On | Create and activate a new tab; disable to reuse the current tab. Opening a new tab does not change the order of existing tabs or move it to the leftmost position. |
 | 启动时打开笔记本导航 (Open on startup) | On | Reveal the navigator in the left sidebar. |
-| 显示附件 (Show attachments) | Off | Show Markdown notes only; enable to include other files. |
+| 显示其他文件 (Show other files) | Off | Show Obsidian-supported formats by default, including Markdown, Canvas, Bases, PDF, images, audio, and video. Enable to also list other formats. |
 | 恢复隐藏的笔记本入口 (Restore hidden notebooks) | Action | Click 显示全部 (Show all) to restore hidden notebook entries. |
 
 In tree mode, clicking a folder selects and expands it; clicking its triangle only expands or collapses it. Right-click → **聚焦此文件夹 (Focus this folder)** limits navigation to that folder. **退出聚焦 (Exit focus)** restores the previous navigation state. Hiding a notebook entry does not delete its folder.
@@ -134,3 +134,7 @@ Source lives in `src/`; the build generates root `main.js`. Tests use an in-memo
 Report your OS, Obsidian version, plugin version, and reproduction steps in [Issues](https://github.com/KOFKINO/onenote-like-navigator/issues). Use sample folders instead of private notes. See [Releases](https://github.com/KOFKINO/onenote-like-navigator/releases) for published versions and changes.
 
 Released under the [MIT license](LICENSE). OneNote is a Microsoft trademark. This independent project is not affiliated with Microsoft or Obsidian.
+
+## File format support
+
+From 0.3.4, the page list includes [Obsidian native file formats](https://help.obsidian.md/Files+and+folders/Accepted+file+formats) by default. Canvas and Bases have distinct icons; non-Markdown filenames retain extensions to distinguish similarly named files. Opening uses Obsidian's normal file view. Actual support depends on your Obsidian version, enabled core/community plugins, and device codecs; listing a file does not add format support. Enable Show other files for formats provided by additional plugins. Existing attachment visibility preferences are preserved.

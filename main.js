@@ -1,6 +1,20 @@
 'use strict';
 const {Plugin, ItemView, Modal, FuzzySuggestModal, Menu, Notice, Setting, PluginSettingTab, TFolder, TFile, setIcon, addIcon} = require('obsidian');
 const C = (()=>{'use strict';
+// Built-in formats documented at https://help.obsidian.md/Files+and+folders/Accepted+file+formats
+const supportedExtensions = new Set(['md','base','canvas','avif','bmp','gif','jpeg','jpg','png','svg','webp','flac','m4a','mp3','ogg','wav','webm','3gp','mkv','mov','mp4','ogv','pdf']);
+const isSupportedFile = extension => supportedExtensions.has(extension.toLowerCase());
+function fileIcon(extension) {
+  const ext = extension.toLowerCase();
+  if (ext === 'md') return 'file-text';
+  if (ext === 'canvas') return 'layout-dashboard';
+  if (ext === 'base') return 'table';
+  if (ext === 'pdf') return 'file-text';
+  if (['avif','bmp','gif','jpeg','jpg','png','svg','webp'].includes(ext)) return 'image';
+  if (['mkv','mov','mp4','ogv','webm'].includes(ext)) return 'video';
+  if (['flac','m4a','mp3','ogg','wav','3gp'].includes(ext)) return 'music';
+  return 'paperclip';
+}
 const parent = p => p.includes('/') ? p.slice(0, p.lastIndexOf('/')) : '';
 const within = (p, root) => !root || p === root || p.startsWith(root + '/');
 const remap = (p, old, next) => p === old ? next : p.startsWith(old + '/') ? next + p.slice(old.length) : p;
@@ -28,7 +42,7 @@ function migrate(data, old, next) {
   for (const [k,v] of Object.entries(data.orders || {})) orders[transform(k)] = v.map(transform);
   data.orders = orders;
 }
-return {parent, within, remap, validName, destination, ordered, migrate};
+return {parent, within, remap, validName, destination, ordered, migrate, isSupportedFile, fileIcon};
 
 })();
 const TYPE = 'onenote-like-navigator';
@@ -84,11 +98,11 @@ class Navigator extends ItemView {
     const match=f=>{if(!query)return true;if(!p.data.showFullTree)return f.name.toLocaleLowerCase().includes(query);if(matches.has(f.path))return matches.get(f.path);const ok=f.name.toLocaleLowerCase().includes(query)||f.children.some(x=>x instanceof TFolder&&match(x));matches.set(f.path,ok);return ok;};
     const draw=(folder,depth,container)=>{for(const f of p.sorted(folder).filter(x=>x instanceof TFolder&&match(x))){const group=el(container,'div','onl-tree-node');const hasChildren=f.children.some(x=>x instanceof TFolder&&!x.name.startsWith('.'));const expanded=p.data.showFullTree&&hasChildren&&(!!query||m.expanded.includes(f.path));this.sectionRow(group,f,depth,expanded,hasChildren);if(expanded){const children=el(group,'div','onl-tree-group');children.setAttribute('role','group');draw(f,depth+1,children);}}};draw(level,0,tree);
     if(!tree.children.length)el(sl,'p','onl-empty',query?'没有匹配的分区':'暂无子分区，可直接在右侧写笔记。');
-    const ph=el(this.pagePane,'div','onl-pane-head');el(ph,'span','onl-page-title',m.section===m.level?'本层页面':section.name);button(ph,'file-plus','新建笔记',()=>p.create(m.section,false));button(ph,'more-horizontal','页面列表选项',e=>{const menu=new Menu();menu.addItem(i=>i.setTitle(p.data.showAttachments?'隐藏附件':'显示附件').onClick(()=>{p.data.showAttachments=!p.data.showAttachments;void p.persist();this.render();}));menu.addItem(i=>i.setTitle('恢复名称排序').onClick(()=>{delete p.data.orders[m.section];void p.persist();this.render();}));menu.showAtMouseEvent(e);});
+    const ph=el(this.pagePane,'div','onl-pane-head');el(ph,'span','onl-page-title',m.section===m.level?'本层页面':section.name);button(ph,'file-plus','新建笔记',()=>p.create(m.section,false));button(ph,'more-horizontal','页面列表选项',e=>{const menu=new Menu();menu.addItem(i=>i.setTitle(p.data.showAttachments?'隐藏其他文件':'显示其他文件').onClick(()=>{p.data.showAttachments=!p.data.showAttachments;void p.persist();this.render();}));menu.addItem(i=>i.setTitle('恢复名称排序').onClick(()=>{delete p.data.orders[m.section];void p.persist();this.render();}));menu.showAtMouseEvent(e);});
     const pl=el(this.pagePane,'div','onl-list');pl.setAttribute('aria-label','页面列表');
-    const files=p.sorted(section).filter(x=>x instanceof TFile && (p.data.showAttachments||x.extension==='md') && x.name.toLocaleLowerCase().includes(this.query.toLocaleLowerCase()));
-    for(const f of files){const b=el(pl,'button','onl-row onl-page'+(m.page===f.path?' is-active':''));b.dataset.path=f.path;b.setAttribute('aria-current',m.page===f.path?'page':'false');setIcon(el(b,'span','onl-row-icon'),f.extension==='md'?'file-text':'paperclip');el(b,'span','onl-label',f.extension==='md'?f.basename:f.name);b.onclick=()=>void p.open(f);b.oncontextmenu=e=>{e.preventDefault();p.menu(f,e);};b.onkeydown=e=>{if(e.altKey&&(e.key==='ArrowUp'||e.key==='ArrowDown')){e.preventDefault();p.reorder(f,e.key==='ArrowUp'?-1:1);}else if(e.key==='F2'){e.preventDefault();p.rename(f);}else if(e.key==='Delete'){e.preventDefault();p.remove(f);}};this.draggable(b,f,false);}
-    if(!files.length)el(pl,'p','onl-empty',this.query?'没有匹配的笔记':'这里还没有笔记。点击上方 ＋ 新建。');
+    const files=p.pageFiles(section,this.query);
+    for(const f of files){const b=el(pl,'button','onl-row onl-page'+(m.page===f.path?' is-active':''));b.dataset.path=f.path;b.setAttribute('aria-current',m.page===f.path?'page':'false');setIcon(el(b,'span','onl-row-icon'),C.fileIcon(f.extension));el(b,'span','onl-label',f.extension==='md'?f.basename:f.name);b.onclick=()=>void p.open(f);b.oncontextmenu=e=>{e.preventDefault();p.menu(f,e);};b.onkeydown=e=>{if(e.altKey&&(e.key==='ArrowUp'||e.key==='ArrowDown')){e.preventDefault();p.reorder(f,e.key==='ArrowUp'?-1:1);}else if(e.key==='F2'){e.preventDefault();p.rename(f);}else if(e.key==='Delete'){e.preventDefault();p.remove(f);}};this.draggable(b,f,false);}
+    if(!files.length)el(pl,'p','onl-empty',this.query?'没有匹配的页面或文件':'暂无可显示的页面或文件，可新建笔记或在列表选项中显示其他文件。');
     this.dropFolder(sl,level);this.dropFolder(pl,section);for(const [key,list] of [['sections',sl],['pages',pl]]){list.scrollTop=m[key+'Scroll']||0;list.onscroll=()=>{m[key+'Scroll']=list.scrollTop;};this.keyboardList(list);}
   }
   keyboardList(list){list.addEventListener('keydown',e=>{if(e.altKey||e.ctrlKey||!['ArrowDown','ArrowUp','Home','End'].includes(e.key))return;const buttons=[...list.querySelectorAll('button[data-path]')];const i=buttons.indexOf(list.ownerDocument.activeElement);if(i<0)return;e.preventDefault();const next=e.key==='Home'?0:e.key==='End'?buttons.length-1:Math.max(0,Math.min(buttons.length-1,i+(e.key==='ArrowDown'?1:-1)));buttons[next]?.focus();});}
@@ -113,7 +127,7 @@ class Navigator extends ItemView {
 }
 class Options extends PluginSettingTab {
   constructor(app,p){super(app,p);this.p=p;}
-  display(){this.containerEl.empty();new Setting(this.containerEl).setName('显示完整目录树').setDesc('默认关闭：左栏只显示当前文件夹的下一级子目录，不嵌套、无三角角标。开启后使用可展开的多层目录树。').addToggle(t=>t.setValue(this.p.data.showFullTree).onChange(async v=>{for(const l of this.p.app.workspace.getLeavesOfType(TYPE))l.view.capture();this.p.data.showFullTree=v;const m=this.p.memory();this.p.selectFolder(m.section);m.sectionsScroll=0;await this.p.persist();this.p.refresh(false);}));new Setting(this.containerEl).setName('在新标签页打开并置于前台').setDesc('默认开启：点击文档时新建标签页，并立即切换到它。关闭后复用当前文档标签页。').addToggle(t=>t.setValue(this.p.data.openInNewTab).onChange(async v=>{this.p.data.openInNewTab=v;await this.p.persist();}));new Setting(this.containerEl).setName('启动时打开笔记本导航').addToggle(t=>t.setValue(this.p.data.openOnStart).onChange(async v=>{this.p.data.openOnStart=v;await this.p.persist();}));new Setting(this.containerEl).setName('显示附件').setDesc('关闭时页面列表只显示 Markdown 笔记。').addToggle(t=>t.setValue(this.p.data.showAttachments).onChange(async v=>{this.p.data.showAttachments=v;await this.p.persist();this.p.refresh();}));new Setting(this.containerEl).setName('恢复隐藏的笔记本入口').addButton(b=>b.setButtonText('显示全部').onClick(async()=>{this.p.data.hiddenBooks=[];await this.p.persist();this.p.refresh();}));}
+  display(){this.containerEl.empty();new Setting(this.containerEl).setName('显示完整目录树').setDesc('默认关闭：左栏只显示当前文件夹的下一级子目录，不嵌套、无三角角标。开启后使用可展开的多层目录树。').addToggle(t=>t.setValue(this.p.data.showFullTree).onChange(async v=>{for(const l of this.p.app.workspace.getLeavesOfType(TYPE))l.view.capture();this.p.data.showFullTree=v;const m=this.p.memory();this.p.selectFolder(m.section);m.sectionsScroll=0;await this.p.persist();this.p.refresh(false);}));new Setting(this.containerEl).setName('在新标签页打开并置于前台').setDesc('默认开启：点击文档时新建标签页，并立即切换到它。关闭后复用当前文档标签页。').addToggle(t=>t.setValue(this.p.data.openInNewTab).onChange(async v=>{this.p.data.openInNewTab=v;await this.p.persist();}));new Setting(this.containerEl).setName('启动时打开笔记本导航').addToggle(t=>t.setValue(this.p.data.openOnStart).onChange(async v=>{this.p.data.openOnStart=v;await this.p.persist();}));new Setting(this.containerEl).setName('显示其他文件').setDesc('默认显示 Obsidian 原生支持的笔记、白板、数据库、PDF、图片和音视频。开启后额外显示其他格式；能否打开取决于 Obsidian 版本及已安装插件。').addToggle(t=>t.setValue(this.p.data.showAttachments).onChange(async v=>{this.p.data.showAttachments=v;await this.p.persist();this.p.refresh();}));new Setting(this.containerEl).setName('恢复隐藏的笔记本入口').addButton(b=>b.setButtonText('显示全部').onClick(async()=>{this.p.data.hiddenBooks=[];await this.p.persist();this.p.refresh();}));}
 }
 module.exports=class OneNoteLike extends Plugin {
   async onload(){addIcon(ICON,ICON_SVG);const saved=await this.loadData();this.data={...DEFAULTS,...saved};if(!saved)this.data.book=this.books()[0]?.path||'';this.data.memories||={};this.data.orders||={};if(this.data.navigationVersion!==3){for(const [book,m] of Object.entries(this.data.memories)){m.level=book;m.section??=book;m.expanded=[];m.focusHistory=[];let path=m.section;while(path&&path!==book&&C.within(path,book)){m.expanded.push(path);path=C.parent(path);}}this.data.navigationVersion=3;}this.saveChain=Promise.resolve();this.registerView(TYPE,leaf=>new Navigator(leaf,this));this.addRibbonIcon(ICON,'笔记本导航',()=>void this.activate());this.addSettingTab(new Options(this.app,this));this.addCommand({id:'open',name:'打开笔记本导航',callback:()=>void this.activate()});this.addCommand({id:'switch-notebook',name:'切换笔记本',callback:()=>this.pickBook()});this.addCommand({id:'reveal',name:'定位当前笔记',callback:()=>this.reveal()});this.addCommand({id:'new-page',name:'在当前分区新建笔记',callback:()=>{this.sanitize();this.create(this.memory().section,false);}});
@@ -125,6 +139,7 @@ module.exports=class OneNoteLike extends Plugin {
   onunload(){clearTimeout(this.timer);}
   persist(){const snapshot=JSON.parse(JSON.stringify(this.data));this.saveChain=this.saveChain.catch(()=>{}).then(()=>this.saveData(snapshot));return this.saveChain;}
   folder(path){const f=this.app.vault.getAbstractFileByPath(path);return f instanceof TFolder?f:this.app.vault.getRoot();}
+  pageFiles(folder,query=''){return this.sorted(folder).filter(file=>file instanceof TFile&&(this.data.showAttachments||C.isSupportedFile(file.extension))&&file.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));}
   books(){return this.app.vault.getRoot().children.filter(x=>x instanceof TFolder&&!x.name.startsWith('.')&&!this.data.hiddenBooks.includes(x.path)).sort((a,b)=>a.name.localeCompare(b.name,'zh-Hans',{numeric:true}));}
   memory(){return this.data.memories[this.data.book]??=( {level:this.data.book,section:this.data.book,page:'',expanded:[],focusHistory:[]} );}
   sanitize(){if(this.data.book&&!this.books().some(x=>x.path===this.data.book))this.data.book=this.books()[0]?.path||'';const m=this.memory();for(const key of ['level','section']){if(!C.within(m[key]||'',this.data.book))m[key]=this.data.book;while(m[key]&&!(this.app.vault.getAbstractFileByPath(m[key]) instanceof TFolder))m[key]=C.parent(m[key]);if(!C.within(m[key],this.data.book))m[key]=this.data.book;}if(!C.within(m.section,m.level))m.section=m.level;m.expanded=(m.expanded||[]).filter(x=>this.app.vault.getAbstractFileByPath(x) instanceof TFolder);m.focusHistory||=[];}

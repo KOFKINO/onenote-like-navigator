@@ -10,6 +10,27 @@ class File{constructor(path,parent){this.path=path;this.name=path.split('/').pop
 const sandbox={module:{exports:{}},require:id=>{assert.equal(id,'obsidian');return {Plugin:class{},ItemView:class{},Modal:class{},FuzzySuggestModal:class{},PluginSettingTab:class{},TFolder:Folder,TFile:File};},setTimeout,clearTimeout,console};
 vm.runInNewContext(fs.readFileSync(require('node:path').resolve(__dirname,'../main.js'),'utf8'),sandbox);
 function fixture(){const root=new Folder('/');const a=new Folder('学习',root),b=new Folder('工作',root),sub=new Folder('学习/证书',a),note=new File('学习/证书/总览.md',sub);root.children=[a,b];a.children=[sub];sub.children=[note];const all=[root,a,b,sub,note];const p=new sandbox.module.exports();p.data={book:'学习',memories:{},orders:{},hiddenBooks:[]};p.app={vault:{getRoot:()=>root,getAbstractFileByPath:path=>all.find(f=>f.path===path),getAllLoadedFiles:()=>all},fileManager:{renameFile:async(f,path)=>{f.path=path;}}};return {p,root,a,b,sub,note,all};}
+test('page list includes native formats by default and preserves scope, search and ordering',()=>{
+  const {p,sub,note}=fixture();
+  const add=name=>{const f=new File(sub.path+'/'+name,sub);f.extension=name.split('.').pop();sub.children.push(f);return f;};
+  const canvas=add('规划.canvas'),base=add('任务.base'),pdf=add('资料.PDF'),image=add('图片.png'),audio=add('录音.mp3'),video=add('视频.mp4'),other=add('数据.custom');
+  const child=new Folder(sub.path+'/子目录',sub);child.children=[new File(child.path+'/深层.md',child)];sub.children.push(child);
+  p.data.showAttachments=false;p.data.orders[sub.path]=[canvas.path,note.path,base.path];
+  const files=Array.from(p.pageFiles(sub));
+  assert.deepEqual(files.slice(0,3),[canvas,note,base]);
+  assert.equal(files.length,7);for(const file of [pdf,image,audio,video])assert.ok(files.includes(file));
+  assert.deepEqual(Array.from(p.pageFiles(sub,'规划')),[canvas]);
+  assert.deepEqual(Array.from(p.pageFiles(sub,'.pdf')),[pdf]);
+  assert.equal(p.pageFiles(sub,'深层').length,0);
+  p.data.showAttachments=true;assert.ok(Array.from(p.pageFiles(sub)).includes(other));
+  p.data.showAttachments=false;assert.ok(!Array.from(p.pageFiles(sub)).includes(other));
+});
+test('Canvas and Bases open as their original files using the host workspace',async()=>{
+  const {p,sub}=fixture();const opened=[];const leaf={openFile:async file=>opened.push(file)};
+  p.app.workspace={getLeaf:()=>leaf,revealLeaf:async()=>{}};p.persist=async()=>{};p.refresh=()=>{};
+  for(const extension of ['canvas','base']){const file=new File(sub.path+'/页面.'+extension,sub);file.extension=extension;await p.open(file);assert.equal(opened.at(-1),file);assert.equal(p.memory().page,file.path);}
+  assert.equal(C.fileIcon('canvas'),'layout-dashboard');assert.equal(C.fileIcon('base'),'table');
+});
 test('book list automatically tracks real new and removed folders',()=>{const {p,root}=fixture();assert.equal(p.books().length,2);root.children.push(new Folder('旅行',root));assert.equal(p.books().length,3);root.children.splice(0,1);p.sanitize();assert.equal(p.books().length,2);assert.notEqual(p.data.book,'学习');});
 test('deleted current section falls back to nearest existing ancestor',()=>{const {p}=fixture();p.memory().level='学习/证书/已删除';p.memory().section='学习/证书/已删除';p.sanitize();assert.equal(p.memory().level,'学习/证书');assert.equal(p.memory().section,'学习/证书');});
 test('move refuses collisions and descendant moves; root destination has no extra slash',async()=>{const {p,root,a,sub,note}=fixture();await assert.rejects(p.move(a,sub));await p.move(note,root);assert.equal(note.path,'总览.md');});
